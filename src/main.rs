@@ -1,37 +1,61 @@
-extern crate libc;
-extern crate nix;
+extern crate serial;
 
-use nix::sys::termios::{tcgetattr, cfmakeraw, ControlFlags, InputFlags, SetArg, tcsetattr, cfsetspeed, BaudRate};
-
+use serial::prelude::*;
 use std::env::args;
-use std::fs::{OpenOptions};
-use std::io::{Write, BufReader, BufRead};
-use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::io::AsRawFd;
+use std::io;
+use std::io::prelude::*;
+use std::io::BufReader;
+use std::time::Duration;
 
 fn main() {
     let device = args().last().unwrap();
-    println!("opening {:?}", device);
-    let mut options = OpenOptions::new();
-    options.write(true);
-    options.read(true);
-    if cfg!(unix) {
-        options.custom_flags(libc::O_NOCTTY);
-        options.custom_flags(libc::O_NONBLOCK);
-    }
-
-    let mut file = options.open(device).unwrap();
-    let mut tios = tcgetattr(file.as_raw_fd()).unwrap();
-    cfmakeraw(&mut tios);
-    tios.input_flags &= !InputFlags::IXOFF;
-    tios.control_flags &= !ControlFlags::CRTSCTS;
-    cfsetspeed(&mut tios, BaudRate::B115200).expect("cfsetspeed failed");
-
-    tcsetattr(file.as_raw_fd(), SetArg::TCSADRAIN, &tios).expect("tcsetattr failed");
-
-    file.write(b"C\rS6\rO\r");
-
-    let mut rdr = BufReader::new(file);
-    let mut line = String::new();
-    rdr.read_line(&mut line);
+    println!("opening {}", device);
+    let mut port = serial::open(&device).unwrap();
+    interact(&mut port).unwrap();
 }
+
+fn interact<T: SerialPort>(port: &mut T) -> io::Result<()> {
+    println!("trying to reconfigure");
+    try!(port.reconfigure(&|settings| {
+        try!(settings.set_baud_rate(serial::Baud115200));
+        settings.set_char_size(serial::Bits8);
+        settings.set_parity(serial::ParityNone);
+        settings.set_stop_bits(serial::Stop1);
+        settings.set_flow_control(serial::FlowNone);
+        Ok(())
+    }));
+
+    println!("reconfiguration successful");
+
+    try!(port.set_timeout(Duration::from_millis(1000)));
+
+    println!("trying to write");
+
+    try!(port.write(b"C\r"));
+    try!(port.write(b"S6\r"));
+    try!(port.write(b"O\r"));
+
+    let mut frame_buf = [0; 40];
+    let mut buf = [0; 1];
+    let mut i = 0;
+
+    //let mut reader = BufReader::new(port);
+    loop {
+        match port.read_exact(&mut buf) {
+            Ok(()) if buf[0] == b'\r' => {
+                //println!("{:?}", &frame_buf[0..i]);
+                let frame = slcan::parse_serial_line(&frame_buf[0..i]);
+                i = 0;
+            }
+            Ok(()) => {
+                frame_buf[i] = buf[0];
+                i += 1;
+            }
+            Err(e) => println!("{}", e),
+        }
+    }
+}
+
+mod canframe;
+mod slcan;
+mod protocols;
