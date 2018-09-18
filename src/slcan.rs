@@ -14,22 +14,11 @@ pub fn parse_serial_line(line: &[u8]) -> Result<CanFrame, String> {
     let data_offset;
 
     if !frame.ext {
-        frame.id = hex_digit_to_int(line[3]).into();
-        frame.id = frame.id | (hex_digit_to_int(line[2]) as u32) << 4;
-        frame.id = frame.id | (hex_digit_to_int(line[1]) as u32) << 8;
-
+        frame.id = hex_to_u32(&line[1..4]).unwrap();
         frame.length = hex_digit_to_int(line[4]) as usize;
         data_offset = 5;
     } else {
-        frame.id = hex_digit_to_int(line[8]).into();
-        frame.id = frame.id | (hex_digit_to_int(line[7]) as u32) << 4;
-        frame.id = frame.id | (hex_digit_to_int(line[6]) as u32) << 8;
-        frame.id = frame.id | (hex_digit_to_int(line[5]) as u32) << 12;
-        frame.id = frame.id | (hex_digit_to_int(line[4]) as u32) << 16;
-        frame.id = frame.id | (hex_digit_to_int(line[3]) as u32) << 20;
-        frame.id = frame.id | (hex_digit_to_int(line[2]) as u32) << 24;
-        frame.id = frame.id | (hex_digit_to_int(line[1]) as u32) << 28;
-
+        frame.id = hex_to_u32(&line[1..9]).unwrap();
         frame.length = hex_digit_to_int(line[9]) as usize;
         data_offset = 10;
     }
@@ -48,6 +37,23 @@ pub fn parse_serial_line(line: &[u8]) -> Result<CanFrame, String> {
     }
 
     Ok(frame)
+}
+
+fn hex_to_u32(input: &[u8]) -> Option<u32> {
+    if input.len() < 1 || input.len() > 8 {
+        return None;
+    }
+
+    let mut result: u32 = 0;
+    for (i, hex_nible) in input.iter().rev().enumerate() {
+        result += match *hex_nible {
+            b'0'...b'9' => ((hex_nible - b'0') as u32) << i * 4,
+            b'A'...b'F' => ((hex_nible - b'A') as u32) << i * 4,
+            b'a'...b'f' => ((hex_nible - b'a') as u32) << i * 4,
+            _ => return None,
+        }
+    }
+    Some(result)
 }
 
 fn hex_digit_to_int(hex: u8) -> u8 {
