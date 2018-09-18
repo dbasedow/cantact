@@ -1,61 +1,72 @@
+extern crate bytes;
+extern crate futures;
 extern crate serial;
+extern crate tokio;
+extern crate tokio_io;
+extern crate tokio_serial;
 
-use serial::prelude::*;
+use std::{env, io, str};
+use tokio::io::AsyncRead;
+use tokio_io::codec::{Decoder, Encoder};
+use tokio_serial::SerialPort;
+
+use bytes::BytesMut;
+
+use futures::{Future, Stream};
+
 use std::env::args;
-use std::io;
-use std::io::prelude::*;
-use std::io::BufReader;
-use std::time::Duration;
+
+struct LineCodec;
+
+impl Decoder for LineCodec {
+    type Item = String;
+    type Error = io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let newline = src.as_ref().iter().position(|b| *b == b'\n');
+        if let Some(n) = newline {
+            let line = src.split_to(n + 1);
+            return match str::from_utf8(line.as_ref()) {
+                Ok(s) => Ok(Some(s.to_string())),
+                Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Invalid String")),
+            };
+        }
+        Ok(None)
+    }
+}
+
+impl Encoder for LineCodec {
+    type Item = String;
+    type Error = io::Error;
+
+    fn encode(&mut self, _item: Self::Item, _dst: &mut BytesMut) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
 
 fn main() {
     let device = args().last().unwrap();
     println!("opening {}", device);
-    let mut port = serial::open(&device).unwrap();
-    interact(&mut port).unwrap();
-}
 
-fn interact<T: SerialPort>(port: &mut T) -> io::Result<()> {
-    println!("trying to reconfigure");
-    try!(port.reconfigure(&|settings| {
-        try!(settings.set_baud_rate(serial::Baud115200));
-        settings.set_char_size(serial::Bits8);
-        settings.set_parity(serial::ParityNone);
-        settings.set_stop_bits(serial::Stop1);
-        settings.set_flow_control(serial::FlowNone);
-        Ok(())
-    }));
+    let settings = tokio_serial::SerialPortSettings::default();
+    let mut port = tokio_serial::Serial::from_path(device, &settings).unwrap();
+    port.set_baud_rate(tokio_serial::BaudRate::Baud115200).expect("unable to set baud rate");
 
-    println!("reconfiguration successful");
+    #[cfg(unix)]
+    port.set_exclusive(false)
+        .expect("Unable to set serial port exlusive");
 
-    try!(port.set_timeout(Duration::from_millis(1000)));
+    let (_, reader) = port.framed(LineCodec).split();
 
-    println!("trying to write");
+    let printer = reader
+        .for_each(|s| {
+            println!("{:?}", s);
+            Ok(())
+        }).map_err(|e| eprintln!("{}", e));
 
-    try!(port.write(b"C\r"));
-    try!(port.write(b"S6\r"));
-    try!(port.write(b"O\r"));
-
-    let mut frame_buf = [0; 40];
-    let mut buf = [0; 1];
-    let mut i = 0;
-
-    //let mut reader = BufReader::new(port);
-    loop {
-        match port.read_exact(&mut buf) {
-            Ok(()) if buf[0] == b'\r' => {
-                //println!("{:?}", &frame_buf[0..i]);
-                let frame = slcan::parse_serial_line(&frame_buf[0..i]);
-                i = 0;
-            }
-            Ok(()) => {
-                frame_buf[i] = buf[0];
-                i += 1;
-            }
-            Err(e) => println!("{}", e),
-        }
-    }
+    tokio::run(printer);
 }
 
 mod canframe;
-mod slcan;
 mod protocols;
+mod slcan;

@@ -39,7 +39,7 @@ enum ResultType {
 struct Message {}
 
 impl IsoTp {
-    fn requestTransfer(
+    fn request_transfer(
         source_address: u32,
         target_address: u32,
         data: &[u8],
