@@ -39,6 +39,8 @@ pub fn parse_serial_line(line: &[u8]) -> Result<CanFrame, String> {
     Ok(frame)
 }
 
+//TODO: make SLCAN line from CanFrame
+
 fn hex_to_u32(input: &[u8]) -> Option<u32> {
     if input.len() < 1 || input.len() > 8 {
         return None;
