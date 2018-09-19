@@ -1,4 +1,6 @@
 use canframe::CanFrame;
+use std::io::Write;
+use std::str;
 
 pub fn parse_serial_line(line: &[u8]) -> Result<CanFrame, String> {
     let mut frame = CanFrame::new();
@@ -39,7 +41,30 @@ pub fn parse_serial_line(line: &[u8]) -> Result<CanFrame, String> {
     Ok(frame)
 }
 
-//TODO: make SLCAN line from CanFrame
+pub fn frame_to_serial_line(frame: CanFrame) -> Result<Vec<u8>, String> {
+    let mut line = vec![0; 30];
+    match frame {
+        CanFrame { ext, rtr, .. } if ext && rtr => line[0] = b'R',
+        CanFrame { ext, rtr, .. } if !ext && rtr => line[0] = b'r',
+        CanFrame { ext, rtr, .. } if ext && !rtr => line[0] = b'T',
+        CanFrame { ext, rtr, .. } if !ext && !rtr => line[0] = b't',
+        _ => unreachable!(),
+    }
+
+    u32_to_hex_canid(frame.id, &mut line[1..]);
+
+    let mut offset = if frame.ext { 9 } else { 4 };
+    write!(&mut line[offset..], "{:X}", frame.length);
+    offset += 1;
+    for b in frame.data[..frame.length].iter() {
+        write!(&mut line[offset..], "{:02X}", b);
+        offset += 2;
+    }
+    line[offset] = b'\r';
+    line.truncate(offset + 1);
+
+    Ok(line)
+}
 
 fn hex_to_u32(input: &[u8]) -> Option<u32> {
     if input.len() < 1 || input.len() > 8 {
@@ -56,6 +81,31 @@ fn hex_to_u32(input: &[u8]) -> Option<u32> {
         }
     }
     Some(result)
+}
+
+fn u32_to_hex_canid(num: u32, buf: &mut [u8]) {
+    if num <= 0x800 {
+        write!(&mut buf[..], "{:03X}", num);
+    } else {
+        write!(&mut buf[..], "{:08X}", num);
+    }
+}
+
+#[test]
+fn test_u32_to_hex_canid() {
+    let mut data = vec![0; 10];
+
+    u32_to_hex_canid(255, &mut data[..]);
+    assert_eq!(str::from_utf8(&data[0..3]).unwrap(), "0FF");
+
+    u32_to_hex_canid(0x01, &mut data[..]);
+    assert_eq!(str::from_utf8(&data[0..3]).unwrap(), "001");
+
+    u32_to_hex_canid(0x20000000, &mut data[..]);
+    assert_eq!(str::from_utf8(&data[0..8]).unwrap(), "20000000");
+
+    u32_to_hex_canid(0x10000, &mut data[..]);
+    assert_eq!(str::from_utf8(&data[0..8]).unwrap(), "00010000");
 }
 
 fn hex_digit_to_int(hex: u8) -> u8 {
@@ -107,4 +157,58 @@ fn test_parse_slcan_frames() {
     let frame = parse_serial_line(b"r1230").unwrap();
     assert!(!frame.ext);
     assert!(frame.rtr);
+}
+
+#[test]
+fn test_frame_to_serial_line() {
+    let frame = CanFrame {
+        id: 0x12345678,
+        length: 1,
+        data: [0; 8],
+        ext: true,
+        rtr: false,
+    };
+
+    let line = frame_to_serial_line(frame).unwrap();
+    assert_eq!(line, b"T12345678100\r");
+
+    let frame = CanFrame {
+        id: 0x12345678,
+        ext: true,
+        rtr: true,
+        length: 0,
+        data: [0; 8],
+    };
+    let line = frame_to_serial_line(frame).unwrap();
+    assert_eq!(line, b"R123456780\r");
+
+    let frame = CanFrame {
+        id: 0x123,
+        ext: false,
+        rtr: false,
+        length: 0,
+        data: [0; 8],
+    };
+    let line = frame_to_serial_line(frame).unwrap();
+    assert_eq!(line, b"t1230\r");
+
+    let frame = CanFrame {
+        id: 0x123,
+        ext: false,
+        rtr: false,
+        length: 1,
+        data: [0xaf, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+    };
+    let line = frame_to_serial_line(frame).unwrap();
+    assert_eq!(line, b"t1231AF\r");
+
+    let frame = CanFrame {
+        id: 0x123,
+        ext: false,
+        rtr: true,
+        length: 0,
+        data: [0; 8],
+    };
+    let line = frame_to_serial_line(frame).unwrap();
+    assert_eq!(line, b"r1230\r");
 }
