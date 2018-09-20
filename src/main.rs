@@ -12,7 +12,7 @@ use tokio_serial::SerialPort;
 
 use bytes::BytesMut;
 
-use futures::{Future, Stream};
+use futures::{Future, Sink, Stream};
 
 use std::env::args;
 
@@ -50,13 +50,15 @@ fn main() {
 
     let settings = tokio_serial::SerialPortSettings::default();
     let mut port = tokio_serial::Serial::from_path(device, &settings).unwrap();
-    port.set_baud_rate(tokio_serial::BaudRate::Baud115200).expect("unable to set baud rate");
+    port.set_baud_rate(tokio_serial::BaudRate::Baud115200)
+        .expect("unable to set baud rate");
 
     #[cfg(unix)]
     port.set_exclusive(false)
         .expect("Unable to set serial port exlusive");
 
-    let (_, reader) = port.framed(LineCodec).split();
+    let (writer, reader) = port.framed(LineCodec).split();
+    println!("reading");
 
     let printer = reader
         .for_each(|s| {
@@ -65,6 +67,12 @@ fn main() {
         }).map_err(|e| eprintln!("{}", e));
 
     tokio::run(printer);
+
+    let fut = writer.send("t200720c00010040301\r".to_string()).then(|x| {
+        println!("wrote stuff");
+        Ok(())
+    });
+    tokio::run(fut);
 }
 
 mod canframe;
