@@ -6,7 +6,7 @@ extern crate tokio_io;
 extern crate tokio_serial;
 
 use std::{env, io, str};
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_io::codec::{Decoder, Encoder};
 use tokio_serial::SerialPort;
 
@@ -23,7 +23,7 @@ impl Decoder for LineCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let newline = src.as_ref().iter().position(|b| *b == b'\n');
+        let newline = src.as_ref().iter().position(|b| *b == b'\r');
         if let Some(n) = newline {
             let line = src.split_to(n + 1);
             return match str::from_utf8(line.as_ref()) {
@@ -57,21 +57,31 @@ fn main() {
     port.set_exclusive(false)
         .expect("Unable to set serial port exlusive");
 
-    let (writer, reader) = port.framed(LineCodec).split();
     println!("reading");
 
-    let printer = reader
-        .for_each(|s| {
-            println!("{:?}", s);
+    let fut = tokio_io::io::write_all(port, b"C\rS6\rO\r")
+        .and_then(|(port, _)| {
+            let (writer, reader) = port.framed(LineCodec).split();
+            println!("wrote stuff");
+            let printer = reader
+                .for_each(|s| {
+                    println!("{:?}", s);
+                    Ok(())
+                }).map_err(|e| eprintln!("{}", e));
+            tokio::spawn(printer);
+
+            let w = writer
+                .send("t200720c00010040301\r".to_string())
+                .and_then(|_| {
+                    println!("wrote more stuff");
+                    Ok(())
+                }).map_err(|e| eprintln!("{}", e));
+
+            tokio::spawn(w);
+
             Ok(())
         }).map_err(|e| eprintln!("{}", e));
 
-    tokio::run(printer);
-
-    let fut = writer.send("t200720c00010040301\r".to_string()).then(|x| {
-        println!("wrote stuff");
-        Ok(())
-    });
     tokio::run(fut);
 }
 
