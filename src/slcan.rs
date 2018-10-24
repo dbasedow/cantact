@@ -1,6 +1,40 @@
 use canframe::CanFrame;
 use std::io::Write;
+use std::io;
+use bytes::BytesMut;
 use std::str;
+use tokio::codec::{Decoder, Encoder, Framed};
+
+pub struct CanFrameCodec;
+
+impl Decoder for CanFrameCodec {
+    type Item = CanFrame;
+    type Error = io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let newline = src.as_ref().iter().position(|b| *b == b'\r');
+        if let Some(n) = newline {
+            let line = src.split_to(n + 1);
+            return match parse_serial_line(&line) {
+                Ok(frame) => Ok(Some(frame)),
+                Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Invalid String")),
+            };
+        }
+        Ok(None)
+    }
+}
+
+impl Encoder for CanFrameCodec {
+    type Item = CanFrame;
+    type Error = io::Error;
+
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let line = frame_to_serial_line(item);
+        dst.extend_from_slice(&line);
+
+        Ok(())
+    }
+}
 
 pub fn parse_serial_line(line: &[u8]) -> Result<CanFrame, String> {
     let mut frame = CanFrame::new();
@@ -41,7 +75,7 @@ pub fn parse_serial_line(line: &[u8]) -> Result<CanFrame, String> {
     Ok(frame)
 }
 
-pub fn frame_to_serial_line(frame: CanFrame) -> Result<Vec<u8>, String> {
+pub fn frame_to_serial_line(frame: CanFrame) -> Vec<u8> {
     let mut line = vec![0; 30];
     match frame {
         CanFrame { ext, rtr, .. } if ext && rtr => line[0] = b'R',
@@ -63,7 +97,7 @@ pub fn frame_to_serial_line(frame: CanFrame) -> Result<Vec<u8>, String> {
     line[offset] = b'\r';
     line.truncate(offset + 1);
 
-    Ok(line)
+    line
 }
 
 fn hex_to_u32(input: &[u8]) -> Option<u32> {
@@ -169,7 +203,7 @@ fn test_frame_to_serial_line() {
         rtr: false,
     };
 
-    let line = frame_to_serial_line(frame).unwrap();
+    let line = frame_to_serial_line(frame);
     assert_eq!(line, b"T12345678100\r");
 
     let frame = CanFrame {
@@ -179,7 +213,7 @@ fn test_frame_to_serial_line() {
         length: 0,
         data: [0; 8],
     };
-    let line = frame_to_serial_line(frame).unwrap();
+    let line = frame_to_serial_line(frame);
     assert_eq!(line, b"R123456780\r");
 
     let frame = CanFrame {
@@ -189,7 +223,7 @@ fn test_frame_to_serial_line() {
         length: 0,
         data: [0; 8],
     };
-    let line = frame_to_serial_line(frame).unwrap();
+    let line = frame_to_serial_line(frame);
     assert_eq!(line, b"t1230\r");
 
     let frame = CanFrame {
@@ -199,7 +233,7 @@ fn test_frame_to_serial_line() {
         length: 1,
         data: [0xaf, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
     };
-    let line = frame_to_serial_line(frame).unwrap();
+    let line = frame_to_serial_line(frame);
     assert_eq!(line, b"t1231AF\r");
 
     let frame = CanFrame {
@@ -209,6 +243,6 @@ fn test_frame_to_serial_line() {
         length: 0,
         data: [0; 8],
     };
-    let line = frame_to_serial_line(frame).unwrap();
+    let line = frame_to_serial_line(frame);
     assert_eq!(line, b"r1230\r");
 }

@@ -1,15 +1,17 @@
 extern crate bytes;
+#[macro_use]
 extern crate futures;
 extern crate serial;
 extern crate tokio;
 extern crate tokio_io;
 extern crate tokio_serial;
+extern crate mio_serial;
 
+use canframe::CanFrame;
 use std::{env, io, str};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_io::codec::{Decoder, Encoder};
+use tokio::codec::{Decoder, Encoder, Framed};
 use tokio_serial::SerialPort;
-
+use slcan::CanFrameCodec;
 use bytes::BytesMut;
 
 use futures::{Future, Sink, Stream};
@@ -55,13 +57,11 @@ fn main() {
 
     #[cfg(unix)]
     port.set_exclusive(false)
-        .expect("Unable to set serial port exlusive");
-
-    println!("reading");
+        .expect("Unable to set serial port exclusiveness");
 
     let fut = tokio_io::io::write_all(port, b"C\rS6\rO\r")
         .and_then(|(port, _)| {
-            let (writer, reader) = port.framed(LineCodec).split();
+            let (writer, reader) = Framed::new(port, CanFrameCodec{}).split();
             println!("wrote stuff");
             let printer = reader
                 .for_each(|s| {
@@ -71,8 +71,13 @@ fn main() {
             tokio::spawn(printer);
 
             let w = writer
-                .send("t200720c00010040301\r".to_string())
-                .and_then(|_| {
+                .send(CanFrame {
+                    id: 0x713,
+                    ext: false,
+                    rtr: false,
+                    length: 8,
+                    data: [0x03, 0x22, 0xf1, 0x91, 0x55, 0x55, 0x55, 0x55],
+                }).and_then(|_| {
                     println!("wrote more stuff");
                     Ok(())
                 }).map_err(|e| eprintln!("{}", e));
